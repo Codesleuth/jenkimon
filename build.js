@@ -158,7 +158,8 @@ $(function() {
     filters = (vars["filters"] || "").toLowerCase().split(','),
     scope = vars["scope"] || "contains",
     showInactive = vars["showInactive"],
-    bonusName = vars["bonusRound"];
+    bonusName = vars["bonusRound"],
+	interval = vars["interval"];
 
   var nameMatcher = (scope == "contains")
     ? function (name, filter) { return name.indexOf(filter) !== -1; }
@@ -174,7 +175,7 @@ $(function() {
 
     xhr = $.ajax({
       url: url,
-      timeout: 5000
+      timeout: interval
     }).done(function(data) {
       xhr = null;
 
@@ -211,7 +212,7 @@ $(function() {
     jobs.on('failed', function() { box.hide(); bonus.hide(box) });
   }
 
-  window.setInterval(getAllJobs, 5000);
+  window.setInterval(getAllJobs, interval);
 
   $(document).click(function () {
     if (xhr == null) {
