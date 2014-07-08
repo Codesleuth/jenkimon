@@ -159,7 +159,7 @@ $(function() {
     scope = vars["scope"] || "contains",
     showInactive = vars["showInactive"],
     bonusName = vars["bonusRound"],
-	interval = vars["interval"];
+	interval = vars["interval"] || 5000;
 
   var nameMatcher = (scope == "contains")
     ? function (name, filter) { return name.indexOf(filter) !== -1; }
