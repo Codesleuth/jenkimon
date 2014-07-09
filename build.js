@@ -121,7 +121,7 @@ var Jobs = function(el) {
 var bonusRound = {
   cat: {
     show: function(el) {
-      var i = "<img style=\"height: 100%; width: 100%\" src=\"http://thecatapi.com/api/images/get.php?format=src&amp;type=gif&t=" + new Date().getTime() + "\">";
+      var i = "<img style=\"height: 100%; width: 100%; transform:rotate(0deg); transition:all 1s linear;\" src=\"http://thecatapi.com/api/images/get.php?format=src&amp;type=gif&t=" + new Date().getTime() + "\">";
       el.html(i);
     },
     hide: function(el) {}
