@@ -1,6 +1,6 @@
-function getUrlVars() {
+window.location.parameters = once(function() {
   var vars = [];
-  var pairs = window.location.href.slice(window.location.href.indexOf('?') + 1).split('&');
+  var pairs = window.location.search.slice(1).split('&');
 
   for (var i = 0; i < pairs.length; i++) {
     var pair = pairs[i].split('=');
@@ -9,21 +9,27 @@ function getUrlVars() {
   }
 
   return vars;
-}
+})();
 
-var Job = function(values) {
-  var _values = values, li, timeText, bar;
+var html = function() {
+  this.el = function(name) {
+    return document.createElement(name);
+  }
+};
+
+var JobView = function() {
+  var li, bar, timeText;
 
   return {
-    draw: function() {
+    init: function(parent, job, values) {
       li = document.createElement("li");
-      li.className = this.status();
+      li.className = job.status();
 
       var h1 = document.createElement("h1");
-      h1.appendChild(document.createTextNode(_values.name));
+      h1.appendChild(document.createTextNode(values.name));
 
       var time = document.createElement("time");
-      timeText = document.createTextNode(this.verb() + " " + this.time());
+      timeText = document.createTextNode(job.verb() + " " + job.time());
       time.appendChild(timeText);
 
       li.appendChild(h1);
@@ -31,19 +37,36 @@ var Job = function(values) {
 
       bar = document.createElement("div");
       bar.classList.add("bar");
-      bar.setAttribute("style", "width: " + this.percentage() + "%;");
+      bar.setAttribute("style", "width: " + job.percentage() + "%;");
 
       li.appendChild(bar);
-      return li;
+      parent.append(li);
+    },
+    refresh: function(job) {
+      li.className = job.status();
+      timeText.textContent = job.verb() + " " + job.time();
+      bar.setAttribute("style", "width: " + job.percentage() + "%;");
+    }
+  }
+}
+
+var Job = function(values, observable) {
+  var _values = values, _observable = observable, view = new JobView();
+
+  return {
+    name: _values.name,
+    init: function(parent) {
+      view.init(parent, this, _values);
     },
     status: function() {
       switch (_values.colour) {
-      case "blue":      return "not-building";
-      case "red":       return "failed";
-      case "red_anime":   return "was-failed in-progress";
-      case "blue_anime":  return "was-built in-progress";
+      case "blue":          return "not-building";
+      case "red":           return "failed";
+      case "aborted":       return "aborted";
+      case "blue_anime":    return "was-built in-progress";
+      case "red_anime":     return "was-failed in-progress";
       case "aborted_anime": return "was-aborted in-progress";
-      default:        return "no-change";
+      default:              return "no-change";
       }
     },
     percentage: function() {
@@ -62,164 +85,235 @@ var Job = function(values) {
       if (this.status() == "failed")
         return "failed";
 
+      if (this.status() == "aborted")
+        return "aborted";
+
       return "finished";
     },
     update: function(values) {
-      _values = values;
+      var transition = function(oldColour, newColour) {
+        if (oldColour === undefined)
+          return "new";
 
-      li.className = this.status();
-      timeText.textContent = this.verb() + " " + this.time();
-      bar.setAttribute("style", "width: " + this.percentage() + "%;");
+        if (newColour == "blue") {
+          if (oldColour == "blue_anime")
+            return "successful";
+
+          return "fixed"; 
+        }
+
+        if (newColour == "red") {
+          if (oldColour == "blue_anime")
+            return "failed";
+
+          return "repeatedlyFailing";
+        }
+
+        if (newColour == "aborted" && oldColour != "aborted") {
+          return "aborted";
+        }
+
+        if (newColour.match(/_anime$/) && !oldColour.match(/_anime$/))
+          return "started";
+
+        return "noChange";
+      }(_values.colour, values.colour);
+      
+      _values = values;
+      view.refresh(this);
+      
+      observable.fire('job_' + transition);
     }
   };
 };
 
-var Jobs = function(el) {
+var Jobs = function(el, baseUrl, ignore) {
   var ul = $(el).html("");
   var _jobs = {};
-  var _cbs = {};
-  var lastVerb = null;
+  var lastColor = null;
+  var _baseUrl = baseUrl;
+  var _ignore = ignore;
+  var observable = new Observable();
 
-  return {
-    update: function(values) {
+  observable.on('update', function(data) {
+    for (var i = 0; i < data.jobs.length; i++) {
+      var job = data.jobs[i];
+
+      if (_ignore(job.name)) { continue; }
+      if (job.lastBuild == null) { continue; }
+
+      var values = {
+        name: job.name,
+        colour: job.color,
+        startedAt: job.lastBuild.timestamp,
+        estimatedDuration: job.lastBuild.estimatedDuration
+      };
+
       if (_jobs[values.name] === void 0) {
-        _jobs[values.name] = new Job(values);
-        ul.append(_jobs[values.name].draw());
+        _jobs[values.name] = new Job(values, observable);
+        _jobs[values.name].init(ul);
       } else {
         _jobs[values.name].update(values);
       }
-    },
-    verb: function() {
-      var s = {};
-      for (var job in _jobs) {
-        var v = _jobs[job].verb();
-        if (!s[v]) { s[v] = 0; }
-        s[v] += 1;
-      }
-
-      if (s['failed'] > 0) return 'failed';
-      if (s['started'] > 0) return 'started';
-      return 'finished';
-    },
-    on: function(thing, f) {
-      _cbs[thing] = f;
-    },
-    done: function() {
-      var v = this.verb();
-      if (v != lastVerb) {
-        var f = _cbs[v];
-        lastVerb = v;
-        f && f();
-      }  
-    },
-    reset: function () {
-      lastVerb = null;
     }
+
+    var c = this.color();
+    if (c != lastColor) {
+      lastColor = c;
+      observable.fire(c);
+    }
+  }.bind(this));
+
+  // Events: (update(data), disconnected, red, anime, green)
+  this.on = observable.on.bind(observable);
+
+  this.poll = function() {
+    var url = _baseUrl + "/api/json?tree=jobs[name,color,lastBuild[number,builtOn,duration,estimatedDuration,timestamp,result]]";
+
+    http.get(url).then(function(data) {
+      observable.fire('connected');
+      observable.fire('update', data); 
+    }).catch(function(error) {
+      observable.fire('disconnected', error);
+    });
   };
+  
+  this.color = function() {
+    var verbs = {};
+    for (var job in _jobs) {
+      var v = _jobs[job].verb();
+      if (!verbs[v]) { verbs[v] = 0; }
+      verbs[v] += 1;
+    }
+
+    if (verbs['failed'] > 0 || verbs['aborted'] > 0) return 'red';
+    if (verbs['started'] > 0) return 'anime';
+    return 'green';
+  };
+  
+  this.reset = function () {
+    lastColor = null;
+  }
+
+  this.observable = observable;
 };
 
 var bonusRound = {
-  cat: {
-    show: function(el) {
-      var i = "<img style=\"height: 100%; width: 100%; transform:rotate(0deg); transition:all 1s linear;\" src=\"http://thecatapi.com/api/images/get.php?format=src&amp;type=gif&t=" + new Date().getTime() + "\">";
-      el.html(i);
-    },
-    hide: function(el) {}
+  cat: function(jobs) {
+    jobs.on('green', function() {
+      imageShow("http://thecatapi.com/api/images/get.php?format=src&amp;type=gif&t=" + new Date().getTime());
+    }).on('anime', 'red', function() {
+      imageHide();
+    });
   },
-  porkour: {
-    show: function(el) {
-      var i = "<img style=\"height: 100%; width: 100%\" src=\"http://i.imgur.com/pIxorOD.gif\">";
-      el.html(i);
-    },
-    hide: function(el) {}
+  porkour: function(jobs) {
+    jobs.on('green', function() {
+      imageShow("http://i.imgur.com/pIxorOD.gif")
+    }).on('anime', 'red', function() {
+      imageHide();
+    });
   },
-  green: {
-    show: function(el) {
+  green: function(jobs) {
+    jobs.on('green', function() {
       $('body').css({background: 'green'});
-    },
-    hide: function(el) {
+    }).on('anime', 'red', function() {
       $('body').css({background: 'black'});
-    }
+    });
   },
-  guid: {
-    show: function(el) {
-      el.html("<h1 style=\"margin-top: 25%; text-align: center; font-size: 3em;\">" + Math.uuid() + "</h1>");
-    },
-    hide: function(el) {}
+  guid: function(jobs) {
+    $('body').prepend('<div id="box"></div>');
+    var box = $('#box').hide();
+
+    jobs.on('green', function() {
+      $('#box').show();
+      $('#box').html("<h1 style=\"margin-top: 25%; text-align: center; font-size: 3em;\">" + Math.uuid() + "</h1>");
+    }).on('anime', 'red', function() {
+      $('#box').hide();
+    });
   }
 }
 
-$(function() {
-  var jobs = new Jobs('ul');
+var audioList = {
+  classic: function(jobs) {
+    var play = function(path) {
+      var _audio;
+      return function() { 
+        if (_audio === void 0) {
+          _audio = new Audio(path);
+        }
+        _audio.play(); 
+      }
+    }
 
-  var vars = getUrlVars(),
-    baseUrl = vars["server"],
-    theme = vars["theme"],
-    filters = (vars["filters"] || "").toLowerCase().split(','),
-    scope = vars["scope"] || "contains",
-    showInactive = vars["showInactive"],
-    bonusName = vars["bonusRound"],
-	interval = vars["interval"] || 5000;
+    jobs.on('job_fixed', play('audioz/classic/fixed.mp3'))
+        .on('job_failed', play('audioz/classic/failed.mp3'))
+        .on('job_repeatedlyFailing', play('audioz/classic/repeatedlyFailing.mp3'));
+  }
+}
+
+function imageShow(url) {
+  $('body').css({
+      "background-image": 'url("' + url + '")'
+  });
+}
+
+function imageHide() {
+  $('body').css({"background-image": ""});
+}
+
+var start = (function() {
+  var vars = window.location.parameters,
+      baseUrl = vars["server"],
+      theme = vars["theme"],
+      filters = (vars["filters"] || "").toLowerCase().split(','),
+      scope = vars["scope"] || "contains",
+      showInactive = vars["showInactive"],
+      bonusName = vars["bonusRound"],
+      audioName = vars['audio'];
 
   var nameMatcher = (scope == "contains")
     ? function (name, filter) { return name.indexOf(filter) !== -1; }
     : function (name, filter) { return name.indexOf(filter) === 0; };
 
+  var ignore = function(name) {
+    return filters.length > 0 && !filters.some(function (filter) { return nameMatcher(name.toLowerCase(), filter); })
+  };
+
+  var jobs = new Jobs('ul', baseUrl, ignore);
+
   if (theme == "neon") { $('body').addClass('neon'); }
   if (showInactive)  { $('body').addClass('show-inactive'); }
 
-  var xhr = null;
-
-  function getAllJobs() {
-    var url = baseUrl + "/api/json?depth=2&tree=jobs[name,color,downstreamProjects[name],upstreamProjects[name],lastBuild[number,builtOn,duration,estimatedDuration,timestamp,result,actions[causes[shortDescription,upstreamProject,upstreamBuild],lastBuiltRevision[branch[name]]],changeSet[items[msg,author[fullName],date]]]]";
-
-    xhr = $.ajax({
-      url: url,
-      timeout: interval
-    }).done(function(data) {
-      xhr = null;
-
-      for (var i = 0; i < data.jobs.length; i++) {
-        var job = data.jobs[i];
-
-        if (filters.length > 0 && !filters.some(function (filter) { return nameMatcher(job.name.toLowerCase(), filter); })) {
-          continue;
-        }
-
-        if (job.lastBuild == null) { continue; }
-
-        jobs.update({
-          name: job.name,
-          colour: job.color,
-          startedAt: job.lastBuild.timestamp,
-          estimatedDuration: job.lastBuild.estimatedDuration
-        });
-      }
-
-      jobs.done();
-    }).fail(function() {
-      console.log("Error contacting the build server");
-    });
+  if (bonusName != void 0 && bonusRound[bonusName] != void 0) {
+    bonusRound[bonusName](jobs);
   }
 
-  var box = $('#box').hide();
-
-  if (bonusName != void 0) {
-    var bonus = bonusRound[bonusName];
-
-    jobs.on('finished', function() { box.show(); bonus.show(box) });
-    jobs.on('started', function() { box.hide(); bonus.hide(box) });
-    jobs.on('failed', function() { box.hide(); bonus.hide(box) });
+  if (audioName != void 0 && audioList[audioName] != void 0) {
+    audioList[audioName](jobs);
   }
 
-  window.setInterval(getAllJobs, interval);
+  $(document).on('click', function() { 
+    jobs.reset();
+    jobs.poll();
+  });
 
-  $(document).click(function () {
-    if (xhr == null) {
-      jobs.reset();
-      getAllJobs();
+  var isConnected = true;
+
+  jobs.on('disconnected', function(err) {
+    console.log("Error contacting the build server", err);
+    imageShow("http://i.stack.imgur.com/jiFfM.jpg");
+    isConnected = false;
+  }).on('connected', function() {
+    if (!isConnected) {
+      imageHide();
+      isConnected = true;
     }
   });
 
-  getAllJobs();
+  window.setInterval(function() { jobs.poll(); }, 5000);
+  jobs.poll();
+
+  return jobs;
 });
+
+$(start);
