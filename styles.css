@@ -10,9 +10,6 @@ body {
     background-repeat: no-repeat;
     background-position: center;
     background-attachment: fixed;
-
-    transform: rotate(0deg);
-    transition: all 1s linear;
     
     -webkit-background-size: contain;
     -moz-background-size: contain;
